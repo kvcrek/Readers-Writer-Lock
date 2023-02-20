@@ -6,10 +6,9 @@
 //----------------------------------------------------------------
 // Implementation of the reader-writer lock using condition
 // variable and a mutex.
-// The implementation is writ-preferring.
+// The implementation is write-preferring.
 //----------------------------------------------------------------
 
-std::mutex m_mutex;
 std::condition_variable cv;
 int readerCount = 0;
 int writersWaiting = 0;
@@ -19,58 +18,57 @@ void task(){
     std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // simulate the reader/writer task
 }
 
-void reader_lock(){
-    std::unique_lock<std::mutex> lock(m_mutex);
-    while (writersWaiting > 0 || writing) {
-        cv.wait(lock);
+template<typename Mutex>
+class reader_lock{
+public:
+    explicit reader_lock(Mutex &m){
+        std::unique_lock<std::mutex> lock(m);
+        while (writersWaiting > 0 || writing) {
+            cv.wait(lock);
+        }
+        readerCount++;
+        lock.unlock();
     }
-    readerCount++;
-    lock.unlock();
-}
-
-void reader_unlock(){
-    std::unique_lock<std::mutex> lock(m_mutex);
-    readerCount--;
-    if (readerCount == 0){
+    ~reader_lock(){
+        readerCount--;
+        if (readerCount == 0){
+            cv.notify_all();
+        }
+    }
+};
+template<typename Mutex>
+class writer_lock{
+public:
+    explicit writer_lock(Mutex &m){
+        std::unique_lock<std::mutex> lock(m);
+        writersWaiting++;
+        while (readerCount > 0 || writing) {
+            cv.wait(lock);
+        }
+        writersWaiting--;
+        writing = true;
+        lock.unlock();
+    }
+    ~writer_lock(){
+        writing = false;
         cv.notify_all();
     }
-    lock.unlock();
-}
+};
 
-void writer_lock() {
-    std::unique_lock<std::mutex> lock(m_mutex);
-    writersWaiting++;
-    while (readerCount > 0 || writing) {
-        cv.wait(lock);
-    }
-    writersWaiting--;
-    writing = true;
-    lock.unlock();
-}
 
-void writer_unlock(){
-    std::unique_lock<std::mutex> lock(m_mutex);
-    writing = false;
-    cv.notify_all();
-    lock.unlock();
-}
-
+std::mutex someMtx;
 
 void read(int id){
-    std::cout << "Reader " << id << " is attempting to acquire lock" << std::endl;
-    reader_lock();
+    reader_lock<std::mutex> rd_lock(someMtx);
     std::cout << "Reader " << id << " acquired the lock" << std::endl;
     task();
-    reader_unlock();
     std::cout << "Reader " << id << " has released the lock" << std::endl;
 }
 
 void write(int id){
-    std::cout << "Writer " << id << " is attempting to acquire lock" << std::endl;
-    writer_lock();
+    writer_lock<std::mutex> wr_lock(someMtx);
     std::cout << "Writer " << id << " acquired the lock" << std::endl;
     task();
-    writer_unlock();
     std::cout << "Writer " << id << " released the lock" << std::endl;
 }
 
@@ -81,13 +79,14 @@ int main()
     std::thread t3(read, 3);
     std::thread t4(write, 1);
     std::thread t5(write, 2);
+    std::thread t6(write, 3);
 
     t1.join();
     t2.join();
     t3.join();
     t4.join();
     t5.join();
-
+    t6.join();
 
     return 0;
 }
